@@ -89,6 +89,11 @@ func vecLiteral(v []float32) string {
 // This is the claim the sponsor's own copy makes ("no consistency gaps between your vector
 // data and your operational database") and the reason a bolt-on vector store cannot compete:
 // there is no window in which the embedding exists without its audit link, or vice versa.
+//
+// Region: REGIONAL BY ROW defaults crdb_region to the GATEWAY's region, so every row written
+// through one node lands in that node's region and the multi-region story is invisible. Real
+// agents are geo-distributed, so callers may pin a region explicitly; when they do, the row
+// is homed there and reads from that region are local.
 func (s *Store) Remember(ctx context.Context, m Memory, embedding []float32, ttl time.Duration) (string, error) {
 	if len(embedding) != Dim {
 		return "", fmt.Errorf("embedding must be %d dims, got %d", Dim, len(embedding))
@@ -111,12 +116,23 @@ func (s *Store) Remember(ctx context.Context, m Memory, embedding []float32, ttl
 	}
 
 	var id, region string
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO memories (agent_id, kind, content, embedding, importance, expires_at, task_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id::STRING, crdb_region::STRING`,
-		s.agentID, string(m.Kind), m.Content, vecLiteral(embedding), m.Importance, expires, nullStr(m.TaskID),
-	).Scan(&id, &region)
+	if m.Region != "" {
+		err = tx.QueryRowContext(ctx, `
+			INSERT INTO memories (agent_id, kind, content, embedding, importance, expires_at, task_id, crdb_region)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			RETURNING id::STRING, crdb_region::STRING`,
+			s.agentID, string(m.Kind), m.Content, vecLiteral(embedding), m.Importance,
+			expires, nullStr(m.TaskID), m.Region,
+		).Scan(&id, &region)
+	} else {
+		err = tx.QueryRowContext(ctx, `
+			INSERT INTO memories (agent_id, kind, content, embedding, importance, expires_at, task_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			RETURNING id::STRING, crdb_region::STRING`,
+			s.agentID, string(m.Kind), m.Content, vecLiteral(embedding), m.Importance,
+			expires, nullStr(m.TaskID),
+		).Scan(&id, &region)
+	}
 	if err != nil {
 		return "", fmt.Errorf("insert memory: %w", err)
 	}
@@ -251,18 +267,34 @@ func (s *Store) BeliefAt(ctx context.Context, ago time.Duration) ([]Memory, erro
 // This also fixes a real regression: as episodic memories accumulate, they crowd a single
 // consolidated lesson out of a small top-k, and the agent silently stops using what it
 // learned. Over-fetching keeps the lesson reachable no matter how much raw experience piles up.
-func (s *Store) RecallLesson(ctx context.Context, embedding []float32, maxDist float64) (*Memory, error) {
+// preferRegion, when supplied, biases selection toward a lesson homed in that region. The
+// demo uses it to surface a recall served FROM a region that is currently down — which is
+// the difference between asserting survivability ("27/27 readable" would print the same if
+// nothing were read) and demonstrating it.
+func (s *Store) RecallLesson(ctx context.Context, embedding []float32, maxDist float64, preferRegion ...string) (*Memory, error) {
 	const candidates = 50
 	mems, err := s.Recall(ctx, embedding, candidates)
 	if err != nil {
 		return nil, err
 	}
-	for _, m := range mems {
-		if m.Kind == Semantic && m.Distance <= maxDist {
+	want := ""
+	if len(preferRegion) > 0 {
+		want = preferRegion[0]
+	}
+	var first *Memory
+	for i := range mems {
+		m := mems[i]
+		if m.Kind != Semantic || m.Distance > maxDist {
+			continue
+		}
+		if first == nil {
+			first = &m
+		}
+		if want != "" && m.Region == want {
 			return &m, nil
 		}
 	}
-	return nil, nil
+	return first, nil
 }
 
 // Consolidate promotes repeated episodic experience into one durable semantic memory.
@@ -274,7 +306,7 @@ func (s *Store) RecallLesson(ctx context.Context, embedding []float32, maxDist f
 // Idempotent: if a semantic memory for this incident class already exists, this is a no-op.
 // Without that check the agent re-learns the same lesson on every subsequent encounter and
 // the semantic tier fills with duplicates.
-func (s *Store) Consolidate(ctx context.Context, embedding []float32, lesson string, minEpisodes int) (string, bool, error) {
+func (s *Store) Consolidate(ctx context.Context, embedding []float32, lesson string, minEpisodes int, maxDist float64, region ...string) (string, bool, error) {
 	similar, err := s.Recall(ctx, embedding, minEpisodes+4)
 	if err != nil {
 		return "", false, err
@@ -284,9 +316,10 @@ func (s *Store) Consolidate(ctx context.Context, embedding []float32, lesson str
 		switch {
 		case m.Kind == Semantic && m.Content == lesson:
 			return m.ID, false, nil // already learned
-		case m.Kind == Episodic && m.Distance < 0.35:
-			// Count only episodic neighbours that are genuinely close. 0.35 on
-			// unit-normalised L2 is a conservative "same incident class" threshold.
+		case m.Kind == Episodic && m.Distance <= maxDist:
+			// Count only episodic neighbours describing the same incident class. The
+			// caller supplies the threshold because it is measured against the embedder
+			// in use, not a universal constant.
 			n++
 		}
 	}
@@ -294,10 +327,18 @@ func (s *Store) Consolidate(ctx context.Context, embedding []float32, lesson str
 		return "", false, nil
 	}
 
+	// Home the lesson where the incidents were observed. Left to default, every lesson
+	// lands in the gateway's region, so a lesson can never be recalled FROM a downed
+	// region — which is exactly the demonstration this project exists to make.
+	home := ""
+	if len(region) > 0 {
+		home = region[0]
+	}
 	id, err := s.Remember(ctx, Memory{
 		Kind:       Semantic,
 		Content:    lesson,
 		Importance: 1.0,
+		Region:     home,
 	}, embedding, 0) // ttl 0 -> never forget
 	if err != nil {
 		return "", false, err

@@ -31,9 +31,9 @@ hr "3. THE AGENT HANDLES A KNOWN INCIDENT WITH A REGION DEAD"
 # that consolidated memory is still reachable while a third of the cluster is gone -- so the
 # signal text must match what it learned, otherwise we would only be proving that an
 # unfamiliar incident falls back to the playbook (true, but not the point).
-"$BIN" -agent agent_a1 recall "disk_pressure: wal segments piling up on roach3"
+"$BIN" -agent agent_a1 recall "disk is filling up, write-ahead log segments not being truncated"
 echo
-curl -s -m 25 -X POST "localhost:8791/api/incident?kind=disk_pressure&detail=wal+segments+piling+up+on+roach3" \
+curl -s -m 25 -X POST "localhost:8791/api/incident?kind=disk_pressure&detail=disk+is+filling+up%2C+write-ahead+log+segments+not+being+truncated" \
   | python3 -m json.tool || echo "(serve not running: start it with '$BIN serve &')"
 
 hr "4. CHAIN INTEGRITY DURING THE OUTAGE"

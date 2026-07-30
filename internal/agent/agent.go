@@ -57,6 +57,26 @@ var playbook = map[string]string{
 	"node_down":       "page a human",
 }
 
+// Distance thresholds, measured rather than guessed.
+//
+// With the trigram embedder, differently-worded reports of the SAME incident class land at
+// L2 0.86-1.06, while a genuinely different class (replication lag vs disk pressure) sits at
+// 1.27. So the boundary belongs at ~1.15: wide enough that rephrasing still matches, tight
+// enough that an unrelated incident does not.
+//
+// These constants are load-bearing. An earlier build used 0.35/0.40, tuned when the demo fired
+// the identical string every time and every same-class distance was 0.0000. The moment the
+// inputs were made realistically varied, nothing matched and the agent silently stopped
+// learning - the failure looked like a logic bug but was purely a threshold left behind by
+// unrealistic test data.
+const (
+	// SameIncidentClass: two reports describe the same underlying problem.
+	SameIncidentClass = 1.15
+	// LessonApplies: a consolidated lesson is close enough to drive the decision. Slightly
+	// wider, because the lesson text is prose while the signal is a symptom report.
+	LessonApplies = 1.20
+)
+
 // Handle runs one full agent cycle and returns the action taken.
 //
 // The memory write is transactional with its audit receipt, so an action is never recorded
@@ -71,7 +91,7 @@ func (a *Agent) Handle(ctx context.Context, taskID string, sig Signal) (Action, 
 	//      it, accumulated episodes crowd the one consolidated lesson out of a small top-k
 	//      and the agent silently stops using what it learned.
 	//   2. Recall gives the episodic neighbours that drive consolidation.
-	lesson, err := a.store.RecallLesson(ctx, vec, 0.40)
+	lesson, err := a.store.RecallLesson(ctx, vec, LessonApplies, nodeRegion(sig.Node))
 	if err != nil {
 		return Action{}, fmt.Errorf("recall lesson: %w", err)
 	}
@@ -100,18 +120,30 @@ func (a *Agent) Handle(ctx context.Context, taskID string, sig Signal) (Action, 
 	}
 
 	// PERSIST. Episodic memories decay after 24h; the lessons distilled from them do not.
+	//
+	// The region is set from where the incident was OBSERVED, not left to default. Left
+	// unset, REGIONAL BY ROW homes every row in the gateway node's region, so a single-
+	// gateway deployment piles all memories into one region and the geo-distribution the
+	// schema provides becomes invisible. A real fleet reports incidents from wherever the
+	// affected node lives, which is what nodeRegion models.
 	if _, err := a.store.Remember(ctx, memory.Memory{
 		Kind:       memory.Episodic,
 		Content:    text + " -> " + act.Name,
 		Importance: 0.6,
 		TaskID:     taskID,
+		Region:     nodeRegion(sig.Node),
 	}, vec, 24*time.Hour); err != nil {
 		return act, fmt.Errorf("persist episode: %w", err)
 	}
 
 	// CONSOLIDATE. Three similar episodes is enough to stop re-deriving the lesson.
+	//
+	// The lesson is embedded from the INCIDENT text, not from the runbook sentence. That is
+	// deliberate: recall at decision time queries with an incident description, so the lesson
+	// has to live near incidents in vector space to be found. Embedding the runbook prose
+	// instead would file it next to other prose and it would never surface.
 	lessonText := fmt.Sprintf("runbook: for %s, %s", sig.Kind, preferredRemedy(sig.Kind))
-	if _, learned, err := a.store.Consolidate(ctx, vec, lessonText, 3); err != nil {
+	if _, learned, err := a.store.Consolidate(ctx, vec, lessonText, 3, SameIncidentClass, nodeRegion(sig.Node)); err != nil {
 		return act, fmt.Errorf("consolidate: %w", err)
 	} else if learned {
 		act.Learned = true
@@ -140,9 +172,38 @@ func (a *Agent) recordStep(ctx context.Context, taskID string, sig Signal, act A
 	return tx.Commit()
 }
 
+// nodeRegion maps a cluster node to the region it lives in.
+//
+// In a real deployment this comes from the node's --locality; here the demo topology is
+// fixed and known, so a lookup keeps the mapping explicit and testable. An unknown node
+// falls back to "" which lets CockroachDB apply its gateway default.
+func nodeRegion(node string) string {
+	switch node {
+	case "roach1":
+		return "us-east-1"
+	case "roach2":
+		return "us-west-2"
+	case "roach3":
+		return "eu-west-1"
+	default:
+		return ""
+	}
+}
+
 // extractRemedy pulls the action out of a consolidated runbook line.
+//
+// Lessons are formatted "runbook: for <kind>, <remedy>", and the remedy itself may contain
+// commas ("drain the lagging node, then restart it"). Splitting on the LAST comma therefore
+// truncated the action to "then restart it" — a real bug caught only by watching the dashboard.
+// Split on the FIRST comma after the "for <kind>" prefix instead.
 func extractRemedy(lesson string) string {
-	if i := strings.LastIndex(lesson, ", "); i >= 0 {
+	const prefix = "runbook: for "
+	if strings.HasPrefix(lesson, prefix) {
+		if i := strings.Index(lesson[len(prefix):], ", "); i >= 0 {
+			return strings.TrimSpace(lesson[len(prefix)+i+2:])
+		}
+	}
+	if i := strings.Index(lesson, ", "); i >= 0 {
 		return strings.TrimSpace(lesson[i+2:])
 	}
 	return "escalate"

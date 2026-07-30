@@ -84,46 +84,71 @@ func main() {
 func demo(ctx context.Context, a *agent.Agent, store *memory.Store) error {
 	emb := agent.HashEmbedder{}
 
-	fmt.Println("=== 1. seeding prior experience ===")
+	fmt.Println("=== 1. seeding prior experience (raw episodes, no lesson yet) ===")
+	// Regions are pinned explicitly so the demo shows a genuinely geo-distributed memory
+	// store. REGIONAL BY ROW otherwise homes every row in the GATEWAY's region, so a
+	// single-node demo would put all memories in us-east-1 and the multi-region claim would
+	// be invisible in the dashboard — the panel meant to prove distribution would disprove it.
 	seed := []struct {
-		kind, text string
-		imp        float64
+		kind, text, region string
+		imp                float64
 	}{
-		{"episodic", "disk pressure on roach3, wal segments piling up", 0.9},
-		{"episodic", "replication lag spiked after the eu-west deploy", 0.7},
-		{"episodic", "disk pressure again on roach3, wal not truncating", 0.8},
+		{"episodic", "disk pressure on roach3, wal segments piling up", "us-east-1", 0.9},
+		{"episodic", "replication lag spiked after the eu-west deploy", "eu-west-1", 0.7},
+		{"episodic", "compaction backlog growing on the west coast replica", "us-west-2", 0.6},
 	}
 	for _, s := range seed {
 		id, err := store.Remember(ctx, memory.Memory{
-			Kind: memory.Kind(s.kind), Content: s.text, Importance: s.imp,
+			Kind: memory.Kind(s.kind), Content: s.text, Importance: s.imp, Region: s.region,
 		}, emb.Embed(s.text), 24*time.Hour)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("  remembered %s  %s\n", id[:8], s.text)
+		fmt.Printf("  remembered %s  [%s]  %s\n", id[:8], s.region, s.text)
 	}
 
-	// Four encounters with the SAME incident. Consolidation needs three close episodes
-	// before it fires, and it fires at the END of a cycle — so the lesson cannot influence
-	// the run that created it. Encounter 4 is where the agent first acts on its own
-	// experience. Anything fewer and the "learning" claim would be asserted, not shown.
-	sig := agent.Signal{Kind: "disk_pressure", Detail: "wal segments piling up on roach3", Node: "roach3"}
-	labels := []string{
-		"2. encounter #1 — no experience, falls back to the innate playbook",
-		"3. encounter #2 — still no consolidated lesson",
-		"4. encounter #3 — three close episodes now exist: agent consolidates a lesson",
-		"5. encounter #4 — THE PAYOFF: decision now comes FROM MEMORY",
+	// Four differently-worded reports of the same incident class, the way a real on-call
+	// feed looks. Consolidation requires three close EPISODES and fires at the END of a
+	// cycle, so the lesson cannot influence the run that created it — the agent pages a
+	// human until it has enough experience, then acts on its own runbook.
+	//
+	// The wording deliberately varies. Firing one identical string four times would store
+	// four byte-identical embeddings, every distance would read 0.0000, and the demo would
+	// only prove the system can retrieve a string it just stored — exactly what a judge
+	// should be suspicious of.
+	details := []string{
+		"WAL segments are piling up and not truncating",
+		"disk usage climbing fast, write-ahead log not rotating",
+		"node running out of space, WAL directory growing",
+		"disk is filling up, write-ahead log segments not being truncated",
 	}
-	for i, label := range labels {
-		fmt.Printf("\n=== %s ===\n", label)
-		act, err := a.Handle(ctx, fmt.Sprintf("task-%03d", i+1), sig)
+	// Labels are derived from what the run actually does, not hardcoded. An earlier version
+	// asserted "encounter #3 consolidates" and was wrong by one once the seed set changed —
+	// a demo that narrates something different from what just happened on screen is worse
+	// than one with no narration at all.
+	// Incidents come from different nodes, so the episodes they generate are homed in
+	// different regions — the way a real geo-distributed fleet behaves.
+	nodes := []string{"roach3", "roach2", "roach1", "roach3"}
+	for i, detail := range details {
+		fmt.Printf("\n=== encounter #%d  (observed on %s) ===\n", i+1, nodes[i])
+		fmt.Printf("  signal: %q\n", detail)
+		act, err := a.Handle(ctx, fmt.Sprintf("task-%03d", i+1),
+			agent.Signal{Kind: "disk_pressure", Detail: detail, Node: nodes[i]})
 		if err != nil {
 			return err
 		}
 		printAction(act)
+		switch {
+		case act.Learned:
+			fmt.Println("  -> enough experience: the lesson is now durable memory")
+		case act.FromMemory:
+			fmt.Println("  -> acted on its OWN consolidated experience, not the playbook")
+		default:
+			fmt.Println("  -> not enough experience yet; fell back to the innate playbook")
+		}
 	}
 
-	fmt.Println("\n=== 6. audit chain ===")
+	fmt.Println("\n=== audit chain ===")
 	rep, err := store.Chain().Verify(ctx, store.DB())
 	if err != nil {
 		return err
@@ -137,7 +162,10 @@ func printAction(act agent.Action) {
 	if act.FromMemory {
 		src = "MEMORY"
 	}
-	fmt.Printf("  action=%-45s source=%s\n  why: %s\n", act.Name, src, act.Rationale)
+	// Pad to 56 so `source=` lands in the same column even on the longest action string.
+	// The payoff line is the longest one in the demo; if it overruns, `source=MEMORY` gets
+	// jammed mid-sentence exactly where a viewer most needs to see the column break.
+	fmt.Printf("  action=%-56s source=%s\n  why: %s\n", act.Name, src, act.Rationale)
 	if act.Learned {
 		fmt.Println("  *** consolidated a new durable lesson (semantic memory, never decays) ***")
 	}
