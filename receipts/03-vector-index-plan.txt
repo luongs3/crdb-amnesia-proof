@@ -1,0 +1,20 @@
+distribution: local
+
+• top-k
+│ estimated row count: 3
+│ order: +column15
+│ k: 3
+│
+└── • render
+    │
+    └── • lookup join
+        │ table: memories@pk_memories
+        │ equality: (crdb_region, agent_id, id) = (crdb_region, agent_id, id)
+        │ equality cols are key
+        │
+        └── • vector search
+              table: memories@mem_agent_id_embedding_idx
+              target count: 3
+              prefix spans: [/'eu-west-1'/'agent_a1' - /'eu-west-1'/'agent_a1'] [/'us-east-1'/'agent_a1' - /'us-east-1'/'agent_a1'] [/'us-west-2'/'agent_a1' - /'us-west-2'/'agent_a1']
+
+✅ planner uses the C-SPANN vector index (mem_agent_id_embedding_idx)

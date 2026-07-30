@@ -1,0 +1,64 @@
+
+[1;33m=== 0. BASELINE — agent learns from experience, all 3 regions up ===[0m
+
+=== 4. encounter #3 — three close episodes now exist: agent consolidates a lesson ===
+  action=page a human                                  source=playbook
+  why: innate playbook (no relevant experience)
+  *** consolidated a new durable lesson (semantic memory, never decays) ***
+
+=== 5. encounter #4 — THE PAYOFF: decision now comes FROM MEMORY ===
+  action=truncate WAL and expand the volume before paging source=MEMORY
+  why: recalled lesson (dist 0.0000, region us-east-1): runbook: for disk_pressure, truncate WAL and expand the volume before paging
+
+=== 6. audit chain ===
+  chain VERIFIED: 12 links, 0 gaps, 0 bad hashes, 0 broken links, regions=map[us-east-1:12]
+
+[1;33m=== 1. CHAIN BEFORE THE OUTAGE ===[0m
+chain VERIFIED: 12 links, 0 gaps, 0 bad hashes, 0 broken links, regions=map[us-east-1:12]
+✅ every link's HMAC recomputes and every prev_hash pointer resolves
+
+[1;33m=== 2. KILL REGION eu-west-1 ===[0m
+waiting 16s for the liveness lease to expire................
+id	address	is_available	is_live
+1	roach1:26257	true	true
+2	roach2:26257	true	true
+3	roach3:26257	false	false
+
+[1;33m=== 3. THE AGENT HANDLES A KNOWN INCIDENT WITH A REGION DEAD ===[0m
+query: "disk_pressure: wal segments piling up on roach3"
+
+DIST       KIND         REGION    CONTENT
+0.0000     episodic     us-east-1 disk_pressure: wal segments piling up on roach3 -> page a human
+0.0000     episodic     us-east-1 disk_pressure: wal segments piling up on roach3 -> truncate WAL and expand the volume before paging
+0.0000     semantic     us-east-1 runbook: for disk_pressure, truncate WAL and expand the volume before paging
+0.0000     episodic     us-east-1 disk_pressure: wal segments piling up on roach3 -> page a human
+0.0000     episodic     us-east-1 disk_pressure: wal segments piling up on roach3 -> page a human
+
+{
+    "action": "truncate WAL and expand the volume before paging",
+    "from_memory": true,
+    "learned": false,
+    "rationale": "recalled lesson (dist 0.0000, region us-east-1): runbook: for disk_pressure, truncate WAL and expand the volume before paging",
+    "task": "task-1785397105503"
+}
+
+[1;33m=== 4. CHAIN INTEGRITY DURING THE OUTAGE ===[0m
+chain VERIFIED: 14 links, 0 gaps, 0 bad hashes, 0 broken links, regions=map[us-east-1:14]
+✅ every link's HMAC recomputes and every prev_hash pointer resolves
+
+[1;33m=== 5. RESTORE THE REGION ===[0m
+waiting for roach3 to rejoin and catch up....................
+
+[1;33m=== 6. THE REVIVED NODE SERVES BACK WHAT IT NEVER SAW ===[0m
+content	crdb_region	created_at
+disk_pressure: wal segments piling up on roach3 -> truncate WAL 	us-east-1	2026-07-30 07:38:25.524569+00
+disk_pressure: wal segments piling up on roach3 -> truncate WAL 	us-east-1	2026-07-30 07:38:08.302825+00
+runbook: for disk_pressure, truncate WAL and expand the volume b	us-east-1	2026-07-30 07:38:08.282592+00
+
+[1;33m=== 7. FINAL CHAIN VERIFICATION ===[0m
+chain VERIFIED: 14 links, 0 gaps, 0 bad hashes, 0 broken links, regions=map[us-east-1:14]
+✅ every link's HMAC recomputes and every prev_hash pointer resolves
+id	address	is_available	is_live
+1	roach1:26257	true	true
+2	roach2:26257	true	true
+3	roach3:26257	true	true

@@ -1,0 +1,11 @@
+=== RLS: database-enforced tenant isolation ===
+root_sees
+10
+agent_a1_sees
+9
+
+=== belief replay (AS OF SYSTEM TIME) ===
+memories at now-1m0s: 0
+memories right now:  9
+(window bounded by gc.ttlseconds = 4h; older history is garbage collected)
+

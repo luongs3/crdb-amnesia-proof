@@ -1,0 +1,10 @@
+endpoint: https://cockroachlabs.cloud/mcp
+probe:    HTTP 401 {"error":"invalid_request","error_description":"Authorization required"}
+
+
+no CRDB_API_KEY set — skipping authenticated tool calls.
+HTTP 401 above confirms the managed endpoint is live and auth-gated.
+
+agent memory writes deliberately do NOT go through MCP:
+  writes        -> direct SQL, serializable txn + hash-chained receipt
+  introspection -> MCP, read-only, RBAC-checked, audit-logged per call

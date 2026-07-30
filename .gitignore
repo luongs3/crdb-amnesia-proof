@@ -1,3 +1,5 @@
 roachlogs/
 *.log
 .env
+bootstrap
+function.zip
