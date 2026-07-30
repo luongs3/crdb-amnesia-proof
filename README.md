@@ -92,7 +92,8 @@ Consolidation is idempotent — the lesson is written once, not re-learned on ev
 take days, and nothing that gates the deadline should sit in someone else's queue. Bedrock is
 supported as an optional embedding upgrade that nothing depends on.
 
-**Live demo:** see the submission page. `agent serve` exposes the dashboard, `/healthz`,
+**Live demo:** **https://deploytest.theodoikenh.com/amnesia/** — dashboard, `/healthz`, `/api/cluster`,
+`/api/verify`, and an SSE stream. Backed by a real 3-node/3-region CockroachDB cluster on the host.
 `/api/cluster`, `/api/verify` and an SSE stream.
 
 ---

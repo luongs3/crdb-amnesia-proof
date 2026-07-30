@@ -1,0 +1,23 @@
+[Unit]
+Description=Amnesia-Proof Agent (CockroachDB x AWS Hackathon demo)
+Documentation=https://github.com/luongs3/crdb-amnesia-proof
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/amnesia-proof
+Environment=CRDB_DSN=postgres://root@localhost:26257/agentmem?sslmode=disable
+Environment=RECEIPT_KEY=amnesia-proof-dev-key
+ExecStart=/root/amnesia-proof/amnesia-agent -addr 127.0.0.1:8805 serve
+Restart=always
+RestartSec=5
+# The demo cluster lives in Docker on this host; give it time to come back after a reboot
+# before the agent starts failing its DB pings.
+ExecStartPre=/bin/sleep 5
+StandardOutput=append:/var/log/amnesia-agent.log
+StandardError=append:/var/log/amnesia-agent.log
+
+[Install]
+WantedBy=multi-user.target

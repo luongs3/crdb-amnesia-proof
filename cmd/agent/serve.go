@@ -307,9 +307,13 @@ const dashboardHTML = `<!doctype html>
   </div>
 </div>
 <script>
+// All fetches are RELATIVE so the dashboard works whether it is served at the domain root
+// (local: http://localhost:8791/) or mounted under a path behind a reverse proxy
+// (public: https://.../amnesia/). An absolute '/events' would resolve to the domain root and
+// silently hit whatever else lives there -- which is exactly what happened on first deploy.
 const log = m => { const d=document.createElement('div'); d.className='row'; d.innerHTML=m;
   document.getElementById('log').prepend(d); };
-new EventSource('/events').onmessage = e => {
+new EventSource('events').onmessage = e => {
   const s = JSON.parse(e.data);
   if (s.nodes) document.getElementById('nodes').innerHTML =
     '<table><tr><th>id</th><th>address</th><th>locality</th><th>live</th></tr>' +
@@ -320,11 +324,11 @@ new EventSource('/events').onmessage = e => {
     Object.entries(s.memories_by_region).map(([r,n])=>'<tr><td>'+r+'</td><td>'+n+'</td></tr>').join('')+'</table>';
   if (s.action) log('<b>'+s.action+'</b> &mdash; '+s.rationale);
 };
-async function fire(kind){ const r = await fetch('/api/incident?kind='+kind,{method:'POST'});
+async function fire(kind){ const r = await fetch('api/incident?kind='+kind,{method:'POST'});
   const j = await r.json();
   log((j.from_memory?'<span class="mem">[FROM MEMORY]</span> ':'')+'<b>'+j.action+'</b> &mdash; '+j.rationale
       + (j.learned?' <span class="mem">[consolidated new lesson]</span>':'')); }
-async function verify(){ const j = await (await fetch('/api/verify')).json();
+async function verify(){ const j = await (await fetch('api/verify')).json();
   log((j.ok?'<span class="up">CHAIN VERIFIED</span> ':'<span class="down">CHAIN FAILED</span> ')+j.summary); }
 </script>
 `
