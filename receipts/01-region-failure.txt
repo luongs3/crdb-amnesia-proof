@@ -1,0 +1,57 @@
+
+[1;33m=== PRE-OUTAGE BASELINE ===[0m
+content	crdb_region
+disk filling on node 3, wal segments piling up	us-east-1
+replication lag spiked after eu-west deploy	us-east-1
+runbook: drain node before restart	us-east-1
+
+[1;33m=== KILL ENTIRE REGION eu-west-1 (roach3) ===[0m
+roach3 killed at 03:53:24Z
+waiting ~16s for the liveness lease to expire................
+
+[1;33m=== NODE STATUS RECEIPT (node 3 must be is_available=false) ===[0m
+id	address	is_available	is_live
+1	roach1:26257	true	true
+2	roach2:26257	true	true
+3	roach3:26257	false	false
+
+[1;33m=== WRITE DURING REGION OUTAGE ===[0m
+INSERT 0 1
+
+[1;33m=== VECTOR RECALL DURING REGION OUTAGE ===[0m
+content	dist
+disk filling on node 3, wal segments piling up	0
+WROTE DURING REGION OUTAGE	0
+runbook: drain node before restart	1.4142135623730951
+replication lag spiked after eu-west deploy	1.4142135623730951
+
+[1;33m=== BRING THE DEAD REGION BACK ===[0m
+waiting for roach3 to rejoin and catch up....................
+
+[1;33m=== FINAL RECEIPT: read the outage-written row FROM THE NODE THAT WAS DEAD ===[0m
+content	crdb_region	created_at
+WROTE DURING REGION OUTAGE	us-east-1	2026-07-30 03:53:40.798616+00
+
+[1;33m=== CLUSTER HEALTHY AGAIN ===[0m
+id	address	is_available	is_live
+1	roach1:26257	true	true
+2	roach2:26257	true	true
+3	roach3:26257	true	true
+
+=== ADDITIONAL VERIFIED PRIMITIVES (same cluster, v26.2.4, 2026-07-30) ===
+
+Row-Level Security:
+  root      sees 5 rows
+  agent_a1  sees 4 rows   (agent_a2's row invisible; enforced by the DB, not a WHERE clause)
+
+Belief replay (AS OF SYSTEM TIME):
+  now         -> 4 memories for agent_a1
+  '-1m'       -> 3 memories   (the outage write is correctly absent from the past)
+  bounded by gc.ttlseconds = 14400 (4h) -- NOT unlimited time travel
+
+Vector index genuinely in the query plan:
+  • vector search
+        table: memories@mem_agent_id_embedding_idx
+        target count: 3
+        prefix spans: [/'eu-west-1'/'agent_a1' ...] [/'us-east-1'/'agent_a1' ...] [/'us-west-2'/'agent_a1' ...]
+  distances are real: 0 and 1.4142135623730951 (= sqrt(2))
